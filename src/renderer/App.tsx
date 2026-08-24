@@ -103,7 +103,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [modalTask, setModalTask] = useState<TaskInstance | null>(null);
 
-  useEffect(() => hydrate(), [hydrate]);
+  useEffect(() => { void hydrate(); }, [hydrate]);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.completed), [tasks]);
   const completedTasks = useMemo(() => sortCompletedTasks(tasks.filter((task) => task.completed)), [tasks]);
   const visibleTasks = (view === "board" ? activeTasks : completedTasks).filter((task) => matchesFilter(task, filter) && task.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));

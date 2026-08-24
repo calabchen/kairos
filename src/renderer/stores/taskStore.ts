@@ -6,49 +6,64 @@ const STORAGE_KEY = "kairos.tasks.v1";
 type TaskStore = {
   tasks: TaskInstance[];
   hydrated: boolean;
-  hydrate: () => void;
-  addTask: (task: TaskInstance) => void;
-  updateTask: (id: string, changes: Partial<TaskInstance>) => void;
-  removeTask: (id: string) => void;
-  completeTask: (id: string) => void;
-  clearCompleted: () => void;
+  hydrate: () => Promise<void>;
+  addTask: (task: TaskInstance) => Promise<void>;
+  updateTask: (id: string, changes: Partial<TaskInstance>) => Promise<void>;
+  removeTask: (id: string) => Promise<void>;
+  completeTask: (id: string) => Promise<void>;
+  clearCompleted: () => Promise<void>;
 };
 
-function persist(tasks: TaskInstance[]) {
+function hasElectronApi(): boolean {
+  return typeof window !== "undefined" && typeof window.kairos?.loadTasks === "function";
+}
+
+function readBrowserTasks(): TaskInstance[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? taskFileSchema.parse(JSON.parse(raw)).tasks : [];
+  } catch {
+    localStorage.removeItem(STORAGE_KEY);
+    return [];
+  }
+}
+
+async function persist(tasks: TaskInstance[]) {
+  if (hasElectronApi()) {
+    await window.kairos.saveTasks(tasks);
+    return;
+  }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, tasks }));
 }
 
 export const useTaskStore = create<TaskStore>((set, get) => ({
   tasks: [],
   hydrated: false,
-  hydrate: () => {
+  hydrate: async () => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return set({ hydrated: true });
-      const parsed = taskFileSchema.parse(JSON.parse(raw));
-      set({ tasks: parsed.tasks, hydrated: true });
+      const tasks = hasElectronApi() ? (await window.kairos.loadTasks()).tasks : readBrowserTasks();
+      set({ tasks, hydrated: true });
     } catch {
-      localStorage.removeItem(STORAGE_KEY);
-      set({ hydrated: true });
+      set({ tasks: [], hydrated: true });
     }
   },
-  addTask: (task) => {
+  addTask: async (task) => {
     const tasks = [...get().tasks, task];
-    persist(tasks);
+    await persist(tasks);
     set({ tasks });
   },
-  updateTask: (id, changes) => {
+  updateTask: async (id, changes) => {
     const now = new Date().toISOString();
     const tasks = get().tasks.map((task) => task.id === id ? { ...task, ...changes, updatedAt: now } : task);
-    persist(tasks);
+    await persist(tasks);
     set({ tasks });
   },
-  removeTask: (id) => {
+  removeTask: async (id) => {
     const tasks = get().tasks.filter((task) => task.id !== id);
-    persist(tasks);
+    await persist(tasks);
     set({ tasks });
   },
-  completeTask: (id) => {
+  completeTask: async (id) => {
     const now = new Date().toISOString();
     const current = get().tasks.find((task) => task.id === id);
     if (!current) return;
@@ -66,12 +81,12 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     } : undefined;
     const tasks = get().tasks.map((task) => task.id === id ? completed : task);
     if (next) tasks.push(next);
-    persist(tasks);
+    await persist(tasks);
     set({ tasks });
   },
-  clearCompleted: () => {
+  clearCompleted: async () => {
     const tasks = get().tasks.filter((task) => !task.completed);
-    persist(tasks);
+    await persist(tasks);
     set({ tasks });
   },
 }));
