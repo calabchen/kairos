@@ -4,17 +4,18 @@ import path from "node:path";
 import { formatLocalDateTime, taskFileSchema, type TaskInstance, type TaskFile } from "../../shared/task";
 
 const FILE_NAME = "tasks.json";
+type FileSystem = Pick<typeof fs, "readFile" | "writeFile" | "rename" | "rm" | "mkdir">;
 
 export class TaskFileService {
   private readonly filePath: string;
 
-  constructor(userDataPath: string) {
+  constructor(userDataPath: string, private readonly fileSystem: FileSystem = fs) {
     this.filePath = path.join(userDataPath, FILE_NAME);
   }
 
   async load(): Promise<TaskFile> {
     try {
-      const raw = await fs.readFile(this.filePath, "utf8");
+      const raw = await this.fileSystem.readFile(this.filePath, "utf8");
       return taskFileSchema.parse(migrateTaskFile(JSON.parse(raw)));
     } catch (error) {
       if (isFileMissing(error)) return { version: 1, tasks: [] };
@@ -26,9 +27,14 @@ export class TaskFileService {
     const file = taskFileSchema.parse({ version: 1, tasks });
     const directory = path.dirname(this.filePath);
     const temporaryPath = this.filePath + "." + process.pid + "." + randomUUID() + ".tmp";
-    await fs.mkdir(directory, { recursive: true });
-    await fs.writeFile(temporaryPath, JSON.stringify(file, null, 2), "utf8");
-    await fs.rename(temporaryPath, this.filePath);
+    await this.fileSystem.mkdir(directory, { recursive: true });
+    try {
+      await this.fileSystem.writeFile(temporaryPath, JSON.stringify(file, null, 2), "utf8");
+      await this.fileSystem.rename(temporaryPath, this.filePath);
+    } catch (error) {
+      await this.fileSystem.rm(temporaryPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   get path() {

@@ -13,9 +13,10 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { IPC_CHANNELS, type ImportPreview } from "../shared/ipc";
 import { findImportConflicts, mergeImportedTasks } from "../shared/importTasks";
-import { ensureRecurringInstances, taskFileSchema, type TaskInstance } from "../shared/task";
+import { taskFileSchema, type TaskInstance } from "../shared/task";
 import { ReminderScheduler } from "./services/reminderScheduler";
 import { TaskFileService } from "./services/taskFile";
+import { TaskRuntime } from "./services/taskRuntime";
 
 const isDevelopment = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
@@ -23,6 +24,7 @@ let tray: Tray | null = null;
 let shouldQuit = false;
 let taskFile: TaskFileService;
 let reminderScheduler: ReminderScheduler;
+let taskRuntime: TaskRuntime;
 const pendingImports = new Map<string, { current: TaskInstance[]; imported: TaskInstance[] }>();
 
 function createWindow() {
@@ -85,17 +87,12 @@ function quitApplication() {
 
 function registerIpc() {
   ipcMain.handle(IPC_CHANNELS.loadTasks, async () => {
-    const loaded = await taskFile.load();
-    const file = { ...loaded, tasks: ensureRecurringInstances(loaded.tasks) };
-    if (JSON.stringify(file.tasks) !== JSON.stringify(loaded.tasks)) await taskFile.save(file.tasks);
-    reminderScheduler.reschedule(file.tasks);
-    return file;
+    return { version: 1 as const, tasks: await taskRuntime.loadAndSchedule() };
   });
 
   ipcMain.handle(IPC_CHANNELS.saveTasks, async (_event: unknown, rawTasks: unknown) => {
     const tasks = taskFileSchema.parse({ version: 1, tasks: rawTasks }).tasks;
-    await taskFile.save(tasks);
-    reminderScheduler.reschedule(tasks);
+    await taskRuntime.persist(tasks);
   });
   ipcMain.handle(IPC_CHANNELS.startupSettings, () => app.getLoginItemSettings());
   ipcMain.handle(IPC_CHANNELS.setStartup, async (_event: unknown, enabled: boolean) => {
@@ -106,7 +103,8 @@ function registerIpc() {
   ipcMain.handle(IPC_CHANNELS.exportTasks, async () => {
     const result = await dialog.showSaveDialog(mainWindow!, { defaultPath: "kairos-backup.json", filters: [{ name: "JSON", extensions: ["json"] }] });
     if (result.canceled || !result.filePath) return { canceled: true, count: 0 };
-    const file = await taskFile.load();
+    const tasks = await taskRuntime.loadAndSchedule();
+    const file = { version: 1 as const, tasks };
     await import("node:fs/promises").then(({ writeFile }) => writeFile(result.filePath!, JSON.stringify(file, null, 2), "utf8"));
     return { canceled: false, count: file.tasks.length };
   });
@@ -115,7 +113,7 @@ function registerIpc() {
     if (result.canceled || !result.filePaths[0]) return { canceled: true, added: [], conflicts: [] };
     const { readFile } = await import("node:fs/promises");
     const imported = taskFileSchema.parse(JSON.parse(await readFile(result.filePaths[0], "utf8")));
-    const current = await taskFile.load();
+    const current = { version: 1 as const, tasks: await taskRuntime.loadAndSchedule() };
     const conflicts = findImportConflicts(current.tasks, imported.tasks);
     const conflictIds = new Set(conflicts.map((conflict) => conflict.incoming.id));
     const token = randomUUID();
@@ -129,8 +127,7 @@ function registerIpc() {
     const choices = z.record(z.string(), z.enum(["keep-current", "overwrite", "duplicate"])).parse(rawChoices);
     const merged = mergeImportedTasks(pending.current, pending.imported, choices);
     const tasks = merged.tasks;
-    await taskFile.save(tasks);
-    reminderScheduler.reschedule(tasks);
+    await taskRuntime.persist(tasks);
     mainWindow?.webContents.send(IPC_CHANNELS.tasksChanged);
     return merged.result;
   });
@@ -145,6 +142,9 @@ function registerIpc() {
 app.whenReady().then(async () => {
   taskFile = new TaskFileService(app.getPath("userData"));
   reminderScheduler = new ReminderScheduler();
+  taskRuntime = new TaskRuntime(taskFile, reminderScheduler);
+  // Load before creating the window so hidden login starts can schedule reminders.
+  await taskRuntime.loadAndSchedule().catch(() => undefined);
   registerIpc();
   createTray();
   const loginSettings = app.getLoginItemSettings();
