@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { ImportChoice, ImportPreview, ImportResult, TaskFile } from "../shared/ipc";
 import type { TaskInstance } from "../shared/task";
+import type { WindowMode, WindowPreferences } from "../shared/windowMode";
 
 // Keep the sandboxed preload self-contained; it cannot require arbitrary app modules.
 const IPC_CHANNELS = {
@@ -13,6 +14,9 @@ const IPC_CHANNELS = {
   resolveImport: "tasks:import:resolve",
   notificationStatus: "notifications:status",
   requestNotification: "notifications:request",
+  tasksChanged: "tasks:changed",
+  windowPreferences: "window:preferences",
+  setWindowMode: "window:mode:set",
 } as const;
 
 contextBridge.exposeInMainWorld("kairos", {
@@ -26,4 +30,11 @@ contextBridge.exposeInMainWorld("kairos", {
   resolveImport: (token: string, choices: Record<string, ImportChoice>): Promise<ImportResult> => ipcRenderer.invoke(IPC_CHANNELS.resolveImport, token, choices),
   getNotificationStatus: (): Promise<{ supported: boolean }> => ipcRenderer.invoke(IPC_CHANNELS.notificationStatus),
   requestNotification: (): Promise<{ supported: boolean; attempted: boolean }> => ipcRenderer.invoke(IPC_CHANNELS.requestNotification),
+  getWindowPreferences: (): Promise<WindowPreferences> => ipcRenderer.invoke(IPC_CHANNELS.windowPreferences),
+  setWindowMode: (mode: WindowMode): Promise<WindowPreferences> => ipcRenderer.invoke(IPC_CHANNELS.setWindowMode, mode),
+  onTasksChanged: (callback: () => void): (() => void) => {
+    const listener = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.tasksChanged, listener);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.tasksChanged, listener);
+  },
 });

@@ -9,6 +9,8 @@ export const IPC_CHANNELS = {
   tasksChanged: "tasks:changed",
   notificationStatus: "notifications:status",
   requestNotification: "notifications:request",
+  windowPreferences: "window:preferences",
+  setWindowMode: "window:mode:set",
 } as const;
 
 export type { TaskFile } from "./task";

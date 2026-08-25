@@ -33,7 +33,10 @@ beforeEach(() => {
       requestNotification: vi.fn(),
       setStartup: vi.fn(),
       loadTasks: vi.fn(),
-      saveTasks: vi.fn(),
+    saveTasks: vi.fn(),
+      getWindowPreferences: vi.fn().mockResolvedValue({ mode: "normal" }),
+      setWindowMode: vi.fn().mockImplementation(async (mode) => ({ mode })),
+      onTasksChanged: vi.fn().mockReturnValue(() => undefined),
     } satisfies Window["kairos"],
   });
 });
@@ -45,10 +48,10 @@ describe("App", () => {
     render(<App />);
 
     expect(screen.getByRole("heading", { name: "欢迎来到 Kairos" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "立即处理" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "计划处理" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "尽快处理" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "减少或删除" })).toBeInTheDocument();
+    expect(screen.getByText("重要 · 紧急")).toBeInTheDocument();
+    expect(screen.getByText("重要 · 不紧急")).toBeInTheDocument();
+    expect(screen.getByText("不重要 · 紧急")).toBeInTheDocument();
+    expect(screen.getByText("不重要 · 不紧急")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "开始使用" }));
     expect(screen.queryByRole("heading", { name: "欢迎来到 Kairos" })).not.toBeInTheDocument();
@@ -63,7 +66,7 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "导出任务" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "导入任务" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "查看使用说明" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "立即处理" })).not.toBeInTheDocument();
+    expect(screen.queryByText("重要 · 紧急")).not.toBeInTheDocument();
   });
 
   it("shows weekly recurrence labels from Monday to Sunday", () => {
@@ -76,5 +79,16 @@ describe("App", () => {
     expect(screen.getByText("一")).toBeInTheDocument();
     expect(screen.getByText("七")).toBeInTheDocument();
     expect(screen.queryByText("日")).not.toBeInTheDocument();
+  });
+
+  it("switches into the compact widget mode from Pin", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "开始使用" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pin 小组件" }));
+
+    expect(await screen.findByRole("main", { name: "Kairos 小组件" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建任务" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "取消 Pin" })).toBeInTheDocument();
+    expect(screen.getByTestId("widget-quadrant-do-now")).toBeInTheDocument();
   });
 });

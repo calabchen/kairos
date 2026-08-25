@@ -32,6 +32,22 @@ test("creates a task in the board and completes it into the trash", async ({ pag
   await expect(page.getByText("Playwright 核心任务")).toBeVisible();
 });
 
+test("switches to the pinned widget and keeps direct task actions available", async ({ page }) => {
+  await page.getByRole("button", { name: "Pin 小组件" }).click();
+  await expect(page.getByRole("main", { name: "Kairos 小组件" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "新建任务" })).toBeVisible();
+  await page.getByRole("button", { name: "新建任务" }).click();
+  await page.getByLabel("任务标题").fill("小组件任务");
+  await page.getByLabel("截止时间").fill("2099-12-31T10:00");
+  await page.getByRole("button", { name: "保存任务" }).click();
+  const card = page.getByTestId("widget-task-card").filter({ hasText: "小组件任务" });
+  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: "完成" }).click();
+  await expect(card).not.toBeVisible();
+  await page.getByRole("button", { name: "取消 Pin" }).click();
+  await expect(page.getByRole("button", { name: "Pin 小组件" })).toBeVisible();
+});
+
 test("search filters visible tasks without removing them", async ({ page }) => {
   await createTask(page, "可搜索任务");
   await createTask(page, "另一件事情");

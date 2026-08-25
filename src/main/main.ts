@@ -6,6 +6,7 @@ import {
   Menu,
   nativeImage,
   Notification,
+  screen,
   Tray,
 } from "electron";
 import path from "node:path";
@@ -17,6 +18,8 @@ import { taskFileSchema, type TaskInstance } from "../shared/task";
 import { ReminderScheduler } from "./services/reminderScheduler";
 import { TaskFileService } from "./services/taskFile";
 import { TaskRuntime } from "./services/taskRuntime";
+import { WindowPreferencesService, keepBoundsVisible } from "./services/windowPreferences";
+import type { WindowMode, WindowPreferences } from "../shared/windowMode";
 
 const isDevelopment = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
@@ -25,15 +28,43 @@ let shouldQuit = false;
 let taskFile: TaskFileService;
 let reminderScheduler: ReminderScheduler;
 let taskRuntime: TaskRuntime;
+let windowPreferences: WindowPreferencesService;
+let currentWindowPreferences: WindowPreferences;
 const pendingImports = new Map<string, { current: TaskInstance[]; imported: TaskInstance[] }>();
 
-function createWindow() {
+const widgetSize = { width: 560, height: 430 };
+
+function displayWorkAreas() {
+  return screen.getAllDisplays().map((display) => display.workArea);
+}
+
+function safeBounds(bounds: Electron.Rectangle) {
+  return keepBoundsVisible(bounds, displayWorkAreas());
+}
+
+async function saveWindowPreferences() {
+  if (!mainWindow) return;
+  const bounds = mainWindow.getBounds();
+  if (currentWindowPreferences.mode === "widget") {
+    currentWindowPreferences.widgetPosition = { x: bounds.x, y: bounds.y };
+  } else {
+    currentWindowPreferences.normalBounds = bounds;
+  }
+  await windowPreferences.save(currentWindowPreferences).catch(() => undefined);
+}
+
+function createWindow(): BrowserWindow {
+  const mode = currentWindowPreferences.mode;
+  const storedBounds = mode === "normal" ? currentWindowPreferences.normalBounds : undefined;
+  const widgetPosition = currentWindowPreferences.widgetPosition ?? { x: 80, y: 80 };
+  const initialBounds = mode === "widget" ? safeBounds({ ...widgetSize, ...widgetPosition }) : storedBounds ? safeBounds(storedBounds) : { width: 960, height: 640 };
   mainWindow = new BrowserWindow({
-    width: 960,
-    height: 640,
-    center: true,
-    minWidth: 960,
-    minHeight: 640,
+    ...initialBounds,
+    center: mode === "normal" && !storedBounds,
+    frame: mode === "normal",
+    resizable: mode === "normal",
+    minWidth: mode === "normal" ? 960 : widgetSize.width,
+    minHeight: mode === "normal" ? 640 : widgetSize.height,
     title: "Kairos",
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
@@ -42,6 +73,7 @@ function createWindow() {
       sandbox: true,
     },
   });
+  if (process.platform === "darwin") mainWindow.setWindowButtonVisibility(mode === "normal");
 
   mainWindow.on("close", (event: { preventDefault: () => void }) => {
     if (!shouldQuit) {
@@ -49,15 +81,37 @@ function createWindow() {
       mainWindow?.hide();
     }
   });
+  const window = mainWindow;
   mainWindow.on("closed", () => {
-    mainWindow = null;
+    if (mainWindow === window) mainWindow = null;
   });
+  mainWindow.on("move", () => void saveWindowPreferences());
+  mainWindow.on("resize", () => void saveWindowPreferences());
 
   if (isDevelopment) {
     void mainWindow.loadURL("http://127.0.0.1:5173");
   } else {
     void mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
   }
+  return mainWindow;
+}
+
+async function applyWindowMode(mode: WindowMode) {
+  if (!mainWindow || currentWindowPreferences.mode === mode) return;
+  const previousWindow = mainWindow;
+  const currentBounds = previousWindow.getBounds();
+  if (currentWindowPreferences.mode === "normal") {
+    currentWindowPreferences.normalBounds = currentBounds;
+  } else {
+    currentWindowPreferences.widgetPosition = { x: currentBounds.x, y: currentBounds.y };
+  }
+  currentWindowPreferences.mode = mode;
+  await windowPreferences.save(currentWindowPreferences).catch(() => undefined);
+  mainWindow = null;
+  previousWindow.destroy();
+  const nextWindow = createWindow();
+  nextWindow.show();
+  nextWindow.focus();
 }
 
 function showWindow() {
@@ -94,6 +148,13 @@ function registerIpc() {
   ipcMain.handle(IPC_CHANNELS.saveTasks, async (_event: unknown, rawTasks: unknown) => {
     const tasks = taskFileSchema.parse({ version: 1, tasks: rawTasks }).tasks;
     await taskRuntime.persist(tasks);
+    BrowserWindow.getAllWindows().forEach((window) => window.webContents.send(IPC_CHANNELS.tasksChanged));
+  });
+  ipcMain.handle(IPC_CHANNELS.windowPreferences, () => currentWindowPreferences);
+  ipcMain.handle(IPC_CHANNELS.setWindowMode, async (_event: unknown, rawMode: unknown) => {
+    const mode = z.enum(["normal", "widget"]).parse(rawMode);
+    await applyWindowMode(mode);
+    return currentWindowPreferences;
   });
   ipcMain.handle(IPC_CHANNELS.startupSettings, () => app.getLoginItemSettings());
   ipcMain.handle(IPC_CHANNELS.setStartup, async (_event: unknown, enabled: boolean) => {
@@ -129,7 +190,7 @@ function registerIpc() {
     const merged = mergeImportedTasks(pending.current, pending.imported, choices);
     const tasks = merged.tasks;
     await taskRuntime.persist(tasks);
-    mainWindow?.webContents.send(IPC_CHANNELS.tasksChanged);
+    BrowserWindow.getAllWindows().forEach((window) => window.webContents.send(IPC_CHANNELS.tasksChanged));
     return merged.result;
   });
   ipcMain.handle(IPC_CHANNELS.notificationStatus, () => ({ supported: Notification.isSupported() }));
@@ -144,6 +205,8 @@ app.whenReady().then(async () => {
   taskFile = new TaskFileService(app.getPath("userData"));
   reminderScheduler = new ReminderScheduler();
   taskRuntime = new TaskRuntime(taskFile, reminderScheduler);
+  windowPreferences = new WindowPreferencesService(app.getPath("userData"));
+  currentWindowPreferences = await windowPreferences.load();
   // Load before creating the window so hidden login starts can schedule reminders.
   await taskRuntime.loadAndSchedule().catch(() => undefined);
   registerIpc();
