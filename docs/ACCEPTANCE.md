@@ -1,0 +1,28 @@
+# Kairos 验收记录
+
+## 2026-08-25 · macOS arm64
+
+- 平台：macOS，Apple Silicon，构建目标 macOS 13+
+- 构建命令：`pnpm exec electron-builder --mac --arm64`
+- 产物：`dist/ap-mac-xnu.dmg`
+- 产物大小：约 213 MB
+- DMG 校验：`hdiutil verify` 通过
+- DMG 挂载：成功，包含 `Kairos.app` 和 `Applications` 快捷方式
+- 打包应用启动：成功，显示名称为 `Kairos`
+- 关闭窗口：窗口隐藏，应用进程继续运行
+- 正式退出：从应用菜单退出后，进程结束
+- 通知权限：用户在本机 macOS 手工验证，首次通知成功
+- 重新请求通知：用户在本机 macOS 手工验证，重新请求成功
+
+## 2026-08-25 · 自动化与跨平台交叉构建
+
+- `pnpm test`：17 个测试通过（Shared、持久化、导入冲突、App）
+- `pnpm typecheck`：Renderer/Shared 与 Electron Main/Preload 均通过
+- `pnpm build`：生产构建通过
+- `pnpm test:e2e`：5 个 Playwright 用例通过，覆盖创建/完成、搜索/回收站、拖拽重载、重复序列和导入导出冲突
+- 构建输出目录调整为 `release/`，避免 electron-builder 将 `dist/` 内的旧平台输出递归打包进应用
+- Windows x64：`release/ms-win-nt#.exe`，NSIS 安装器与 `.blockmap` 均生成；当前 macOS 仅完成交叉构建和文件类型检查，未完成 Windows 实机安装/生命周期验收
+- Linux x64：`release/lf-lin-lnx.deb`，`ar` 检查包含 `debian-binary`、`control.tar.xz`、`data.tar.xz`；当前 macOS 仅完成交叉构建和包结构检查，未完成 Linux 实机安装/生命周期验收
+- macOS arm64：重新生成 `release/ap-mac-xnu.dmg`，`hdiutil verify` 通过
+
+备注：当前构建未配置 Apple Developer ID 签名和公证，electron-builder 输出了 unsigned app/DMG。Windows/Linux 的安装、托盘、通知和开机启动仍需在对应平台实机完成；RTL 目前有基础 App 测试，但尚未覆盖 Checklist 要求的完整组件矩阵。

@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   nativeImage,
@@ -8,8 +9,11 @@ import {
   Tray,
 } from "electron";
 import path from "node:path";
-import { IPC_CHANNELS } from "../shared/ipc";
-import { type TaskInstance } from "../shared/task";
+import { z } from "zod";
+import { randomUUID } from "node:crypto";
+import { IPC_CHANNELS, type ImportPreview } from "../shared/ipc";
+import { findImportConflicts, mergeImportedTasks } from "../shared/importTasks";
+import { ensureRecurringInstances, taskFileSchema, type TaskInstance } from "../shared/task";
 import { ReminderScheduler } from "./services/reminderScheduler";
 import { TaskFileService } from "./services/taskFile";
 
@@ -19,6 +23,7 @@ let tray: Tray | null = null;
 let shouldQuit = false;
 let taskFile: TaskFileService;
 let reminderScheduler: ReminderScheduler;
+const pendingImports = new Map<string, { current: TaskInstance[]; imported: TaskInstance[] }>();
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -35,7 +40,7 @@ function createWindow() {
     },
   });
 
-  mainWindow.on("close", (event) => {
+  mainWindow.on("close", (event: { preventDefault: () => void }) => {
     if (!shouldQuit) {
       event.preventDefault();
       mainWindow?.hide();
@@ -80,14 +85,60 @@ function quitApplication() {
 
 function registerIpc() {
   ipcMain.handle(IPC_CHANNELS.loadTasks, async () => {
-    const file = await taskFile.load();
+    const loaded = await taskFile.load();
+    const file = { ...loaded, tasks: ensureRecurringInstances(loaded.tasks) };
+    if (JSON.stringify(file.tasks) !== JSON.stringify(loaded.tasks)) await taskFile.save(file.tasks);
     reminderScheduler.reschedule(file.tasks);
     return file;
   });
 
-  ipcMain.handle(IPC_CHANNELS.saveTasks, async (_event, tasks: TaskInstance[]) => {
+  ipcMain.handle(IPC_CHANNELS.saveTasks, async (_event: unknown, rawTasks: unknown) => {
+    const tasks = taskFileSchema.parse({ version: 1, tasks: rawTasks }).tasks;
     await taskFile.save(tasks);
     reminderScheduler.reschedule(tasks);
+  });
+  ipcMain.handle(IPC_CHANNELS.startupSettings, () => app.getLoginItemSettings());
+  ipcMain.handle(IPC_CHANNELS.setStartup, async (_event: unknown, enabled: boolean) => {
+    const openAtLogin = z.boolean().parse(enabled);
+    app.setLoginItemSettings({ openAtLogin, openAsHidden: true });
+    return app.getLoginItemSettings();
+  });
+  ipcMain.handle(IPC_CHANNELS.exportTasks, async () => {
+    const result = await dialog.showSaveDialog(mainWindow!, { defaultPath: "kairos-backup.json", filters: [{ name: "JSON", extensions: ["json"] }] });
+    if (result.canceled || !result.filePath) return { canceled: true, count: 0 };
+    const file = await taskFile.load();
+    await import("node:fs/promises").then(({ writeFile }) => writeFile(result.filePath!, JSON.stringify(file, null, 2), "utf8"));
+    return { canceled: false, count: file.tasks.length };
+  });
+  ipcMain.handle(IPC_CHANNELS.prepareImport, async (): Promise<ImportPreview> => {
+    const result = await dialog.showOpenDialog(mainWindow!, { properties: ["openFile"], filters: [{ name: "JSON", extensions: ["json"] }] });
+    if (result.canceled || !result.filePaths[0]) return { canceled: true, added: [], conflicts: [] };
+    const { readFile } = await import("node:fs/promises");
+    const imported = taskFileSchema.parse(JSON.parse(await readFile(result.filePaths[0], "utf8")));
+    const current = await taskFile.load();
+    const conflicts = findImportConflicts(current.tasks, imported.tasks);
+    const conflictIds = new Set(conflicts.map((conflict) => conflict.incoming.id));
+    const token = randomUUID();
+    pendingImports.set(token, { current: current.tasks, imported: imported.tasks });
+    return { canceled: false, token, added: imported.tasks.filter((task) => !conflictIds.has(task.id)), conflicts };
+  });
+  ipcMain.handle(IPC_CHANNELS.resolveImport, async (_event: unknown, token: unknown, rawChoices: unknown) => {
+    const pending = typeof token === "string" ? pendingImports.get(token) : undefined;
+    if (!pending) throw new Error("导入会话已失效，请重新选择文件");
+    pendingImports.delete(token as string);
+    const choices = z.record(z.string(), z.enum(["keep-current", "overwrite", "duplicate"])).parse(rawChoices);
+    const merged = mergeImportedTasks(pending.current, pending.imported, choices);
+    const tasks = merged.tasks;
+    await taskFile.save(tasks);
+    reminderScheduler.reschedule(tasks);
+    mainWindow?.webContents.send(IPC_CHANNELS.tasksChanged);
+    return merged.result;
+  });
+  ipcMain.handle(IPC_CHANNELS.notificationStatus, () => ({ supported: Notification.isSupported() }));
+  ipcMain.handle(IPC_CHANNELS.requestNotification, () => {
+    if (!Notification.isSupported()) return { supported: false, attempted: false };
+    new Notification({ title: "Kairos 通知", body: "通知已重新请求；未来提醒会按任务设置发送。" }).show();
+    return { supported: true, attempted: true };
   });
 }
 
@@ -96,7 +147,8 @@ app.whenReady().then(async () => {
   reminderScheduler = new ReminderScheduler();
   registerIpc();
   createTray();
-  createWindow();
+  const loginSettings = app.getLoginItemSettings();
+  if (!loginSettings.wasOpenedAtLogin || !loginSettings.wasOpenedAsHidden) createWindow();
 
   if (Notification.isSupported()) {
     // Permission is requested by the operating system when the first notification is shown.

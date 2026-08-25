@@ -90,3 +90,46 @@ button { cursor: pointer; }
 .modal__footer { display: flex; justify-content: end; gap: 5px; margin-top: 25px; padding-top: 18px; border-top: 1px solid #e8e4dc; }
 @media (max-width: 1050px) { .app-shell { padding: 28px 28px 20px; } .quadrant-grid { gap: 10px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }
+.app-error,
+.app-notice {
+  margin: 0 32px 16px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.app-error {
+  color: #8f2d24;
+  background: #fff0ed;
+}
+
+.app-notice {
+  color: #355c42;
+  background: #edf7ef;
+}
+
+.app-error button {
+  margin-left: 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.search-summary,
+.empty-search {
+  margin: 0 32px 16px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  color: #5e665f;
+  background: #f1f3ee;
+  font-size: 13px;
+}
+
+.empty-search {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  color: #737a73;
+}

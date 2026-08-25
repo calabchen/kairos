@@ -1,5 +1,5 @@
 import { Notification } from "electron";
-import type { ReminderOffset, TaskInstance } from "../../shared/task";
+import { parseLocalDateTime, type ReminderOffset, type TaskInstance } from "../../shared/task";
 
 const reminderMilliseconds: Record<Exclude<ReminderOffset, "none">, number> = {
   "one-day": 24 * 60 * 60 * 1000,
@@ -22,7 +22,7 @@ export class ReminderScheduler {
     if (!Notification.isSupported()) return;
     for (const task of tasks) {
       if (task.completed || task.reminder === "none") continue;
-      const triggerAt = Date.parse(task.dueAt) - reminderMilliseconds[task.reminder];
+      const triggerAt = parseLocalDateTime(task.dueAt).getTime() - reminderMilliseconds[task.reminder];
       const delay = triggerAt - Date.now();
       if (delay <= 0) continue;
       this.schedule(task.id, delay);
@@ -48,7 +48,7 @@ export class ReminderScheduler {
     const timer = setTimeout(() => {
       const task = this.tasks.find((item) => item.id === taskId);
       if (!task || task.completed || task.reminder === "none") return;
-      const remaining = Date.parse(task.dueAt) - reminderMilliseconds[task.reminder] - Date.now();
+      const remaining = parseLocalDateTime(task.dueAt).getTime() - reminderMilliseconds[task.reminder] - Date.now();
       if (remaining > 0) {
         this.schedule(taskId, remaining);
       } else {
@@ -66,5 +66,5 @@ function formatDue(iso: string) {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-  }).format(new Date(iso));
+  }).format(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(iso) ? parseLocalDateTime(iso) : new Date(iso));
 }
